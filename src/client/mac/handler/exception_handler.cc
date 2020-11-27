@@ -571,7 +571,7 @@ void* ExceptionHandler::WaitForMessage(void* exception_handler_class) {
 #endif
 
         // This _should_ be safe in this context?
-        fwrite(stderr, "RECEIVED %d EXCEPTION!!!\n", receive.exception);
+        fprintf(stderr, "RECEIVED %d EXCEPTION!!!\n", receive.exception);
 
         int subcode = 0;
         if (receive.exception == EXC_BAD_ACCESS && receive.code_count > 1)
