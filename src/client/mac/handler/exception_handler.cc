@@ -570,6 +570,9 @@ void* ExceptionHandler::WaitForMessage(void* exception_handler_class) {
           gBreakpadAllocator->Unprotect();
 #endif
 
+        // This _should_ be safe in this context?
+        fwrite(stderr, "RECEIVED %d EXCEPTION!!!\n", receive.exception);
+
         int subcode = 0;
         if (receive.exception == EXC_BAD_ACCESS && receive.code_count > 1)
           subcode = receive.code[1];
