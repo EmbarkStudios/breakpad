@@ -77,6 +77,10 @@ class ExceptionHandler {
   // minidump, allowing another handler the opportunity to handle it.
   typedef bool (*FilterCallback)(void* context);
 
+  // A callback function run during exception handling to see if Breakpad should
+  // pass the exception along and essentially ignore it
+  typedef bool (*PauseCallback)(void* context);
+
   // A callback function to run after the minidump has been written.
   // |minidump_id| is a unique id for the dump, so the minidump
   // file is <dump_dir>/<minidump_id>.dmp.
@@ -106,8 +110,8 @@ class ExceptionHandler {
   // be written when WriteMinidump is called.
   // If port_name is non-NULL, attempt to perform out-of-process dump generation
   // If port_name is NULL, in-process dump generation will be used.
-  ExceptionHandler(const string& dump_path,
-                   FilterCallback filter, MinidumpCallback callback,
+  ExceptionHandler(const string& dump_path, FilterCallback filter,
+                   MinidumpCallback callback, PauseCallback pause,
                    void* callback_context, bool install_handler,
                    const char* port_name);
 
@@ -232,6 +236,7 @@ class ExceptionHandler {
   // has been written
   FilterCallback filter_;
   MinidumpCallback callback_;
+  PauseCallback pause_;
   void* callback_context_;
 
   // The callback function to be passed back when we don't want a minidump

@@ -223,12 +223,14 @@ kern_return_t catch_exception_raise(mach_port_t port, mach_port_t failed_thread,
 ExceptionHandler::ExceptionHandler(const string& dump_path,
                                    FilterCallback filter,
                                    MinidumpCallback callback,
+                                   PauseCallback pause,
                                    void* callback_context,
                                    bool install_handler,
                                    const char* port_name)
     : dump_path_(),
       filter_(filter),
       callback_(callback),
+      pause_(pause),
       callback_context_(callback_context),
       directCallback_(NULL),
       handler_thread_(NULL),
@@ -256,6 +258,7 @@ ExceptionHandler::ExceptionHandler(DirectCallback callback,
     : dump_path_(),
       filter_(NULL),
       callback_(NULL),
+      pause_(NULL),
       callback_context_(callback_context),
       directCallback_(callback),
       handler_thread_(NULL),
@@ -308,7 +311,7 @@ bool ExceptionHandler::WriteMinidump(const string& dump_path,
                                      bool write_exception_stream,
                                      MinidumpCallback callback,
                                      void* callback_context) {
-  ExceptionHandler handler(dump_path, NULL, callback, callback_context, false,
+  ExceptionHandler handler(dump_path, NULL, callback, NULL, callback_context, false,
                            NULL);
   return handler.WriteMinidump(write_exception_stream);
 }
@@ -554,6 +557,25 @@ void* ExceptionHandler::WaitForMessage(void* exception_handler_class) {
         if (self->use_minidump_write_mutex_)
           pthread_mutex_unlock(&self->minidump_write_mutex_);
       } else {
+        // Check if we've been asked to pause handling exceptions, and instead
+        // let the exception server deal with them
+        if (self->pause_) {
+          if (self->pause_(self->callback_context_)) {
+            ExceptionReplyMessage reply;
+            if (!breakpad_exc_server(&receive.header, &reply.header)) {
+              fprintf(stderr, "uhmm...exiting...oops?\n");
+              exit(1);
+            }
+
+            // Send a reply and continue the loop
+            mach_msg(&(reply.header), MACH_SEND_MSG,
+                    reply.header.msgh_size, 0, MACH_PORT_NULL,
+                    MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+
+            continue;
+          }
+        }
+
         // When forking a child process with the exception handler installed,
         // if the child crashes, it will send the exception back to the parent
         // process.  The check for task == self_task() ensures that only
