@@ -187,6 +187,8 @@ class ExceptionHandler {
   // success, false otherwise.
   bool SendMessageToHandlerThread(HandlerThreadMessage message_id);
 
+  bool ForwardAndReply( mach_msg_header_t* InHeadP, mach_msg_header_t* OutHeadP);
+
   // All minidump writing goes through this one routine.
   // |task_context| can be NULL. If not, it will be used to retrieve the
   // context of the current thread, instead of using |thread_get_state|.

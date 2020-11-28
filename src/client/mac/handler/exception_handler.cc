@@ -213,9 +213,11 @@ kern_return_t catch_exception_raise(mach_port_t port, mach_port_t failed_thread,
                                     exception_type_t exception,
                                     exception_data_t code,
                                     mach_msg_type_number_t code_count) {
+  fprintf(stderr, "catch_exception_raise, yay!\n");
   if (task != mach_task_self()) {
     return KERN_FAILURE;
   }
+
   return ForwardException(task, failed_thread, exception, code, code_count);
 }
 #endif
@@ -561,18 +563,17 @@ void* ExceptionHandler::WaitForMessage(void* exception_handler_class) {
         // let the exception server deal with them
         if (self->pause_) {
           if (self->pause_(self->callback_context_)) {
-            ExceptionReplyMessage reply;
-            if (!breakpad_exc_server(&receive.header, &reply.header)) {
-              fprintf(stderr, "uhmm...exiting...oops?\n");
-              exit(1);
-            }
+            fprintf(stderr, "EXCEPTION HANDLING PAUSED!! \n");
 
-            // Send a reply and continue the loop
-            mach_msg(&(reply.header), MACH_SEND_MSG,
+            ExceptionReplyMessage reply;
+            if (self->ForwardAndReply(&receive.header, &reply.header)) {
+              mach_msg(&(reply.header), MACH_SEND_MSG,
                     reply.header.msgh_size, 0, MACH_PORT_NULL,
                     MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
-
-            continue;
+              continue;
+            } else {
+              fprintf(stderr, "EXCEPTION HANDLING WAS PAUSED BUT FAILED, WRITING CRASH!! \n");
+            }
           }
         }
 
@@ -882,4 +883,90 @@ bool ExceptionHandler::ResumeThreads() {
   return true;
 }
 
+bool ExceptionHandler::ForwardAndReply( mach_msg_header_t* InHeadP,
+                                        mach_msg_header_t* OutHeadP) {
+  OutHeadP->msgh_bits =
+      MACH_MSGH_BITS(MACH_MSGH_BITS_REMOTE(InHeadP->msgh_bits), 0);
+  OutHeadP->msgh_remote_port = InHeadP->msgh_remote_port;
+  /* Minimal size: routine() will update it if different */
+  OutHeadP->msgh_size = (mach_msg_size_t)sizeof(mig_reply_error_t);
+  OutHeadP->msgh_local_port = MACH_PORT_NULL;
+  OutHeadP->msgh_id = InHeadP->msgh_id + 100;
+
+  if (InHeadP->msgh_id != 2401) {
+    ((mig_reply_error_t*)OutHeadP)->NDR = NDR_record;
+    ((mig_reply_error_t*)OutHeadP)->RetCode = MIG_BAD_ID;
+    return false;
+  }
+
+#ifdef  __MigPackStructs
+#pragma pack(4)
+#endif
+  typedef struct {
+    mach_msg_header_t Head;
+    /* start of the kernel processed data */
+    mach_msg_body_t msgh_body;
+    mach_msg_port_descriptor_t thread;
+    mach_msg_port_descriptor_t task;
+    /* end of the kernel processed data */
+    NDR_record_t NDR;
+    exception_type_t exception;
+    mach_msg_type_number_t codeCnt;
+    integer_t code[2];
+    mach_msg_trailer_t trailer;
+  } Request;
+
+  typedef struct {
+    mach_msg_header_t Head;
+    NDR_record_t NDR;
+    kern_return_t RetCode;
+  } Reply;
+#ifdef  __MigPackStructs
+#pragma pack()
+#endif
+
+  Request* In0P = (Request*)InHeadP;
+  Reply* OutP = (Reply*)OutHeadP;
+
+  if (In0P->task.name != mach_task_self()) {
+    return false;
+  }
+
+  auto* prev = this->previous_;
+
+  unsigned int found;
+  for (found = 0; found < prev->count; ++found) {
+      if (prev->masks[found] & (1 << In0P->exception)) {
+        break;
+      }
+  }
+
+  // Nothing to forward
+  if (found == prev->count) {
+    fprintf(stderr, "** No previous ports for forwarding!! \n");
+    return false;
+  }
+
+  mach_port_t target_port = prev->ports[found];
+  exception_behavior_t target_behavior = prev->behaviors[found];
+
+  kern_return_t result;
+  // TODO: Handle the case where |target_behavior| has MACH_EXCEPTION_CODES
+  // set. https://bugs.chromium.org/p/google-breakpad/issues/detail?id=551
+  switch (target_behavior) {
+    case EXCEPTION_DEFAULT:
+      fprintf(stderr, "FORWARDING EXCEPTION!! \n");
+      result = exception_raise(target_port, In0P->thread.name, In0P->task.name, In0P->exception,
+                              In0P->code, In0P->codeCnt);
+      break;
+    default:
+      fprintf(stderr, "** Unknown exception behavior: %d\n", target_behavior);
+      result = exception_raise(target_port, In0P->thread.name, In0P->task.name, In0P->exception,
+                              In0P->code, In0P->codeCnt);
+      break;
+  }
+
+  OutP->RetCode = result;
+  OutP->NDR = NDR_record;
+}
 }  // namespace google_breakpad
